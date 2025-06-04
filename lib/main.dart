@@ -33,6 +33,7 @@ class _LinuxVMConsoleState extends State<LinuxVMConsole> {
   final List<String> _output = [];
   Process? _qemuProcess;
   final ScrollController _scrollController = ScrollController();
+  final TextEditingController _inputController = TextEditingController();
   bool _isLoading = true;
   String? _errorMessage;
 
@@ -46,6 +47,7 @@ class _LinuxVMConsoleState extends State<LinuxVMConsole> {
   void dispose() {
     _qemuProcess?.kill();
     _scrollController.dispose();
+    _inputController.dispose();
     super.dispose();
   }
 
@@ -87,12 +89,21 @@ class _LinuxVMConsoleState extends State<LinuxVMConsole> {
       return null;
     }
   }
+  String _outputBuffer = '';
+
 
   void _appendOutput(String data) {
+    _outputBuffer += data;
+
+    // Only process full lines
+    final lines = _outputBuffer.split('\n');
+    _outputBuffer = lines.removeLast(); // Save the incomplete line
+
     setState(() {
-      _output.addAll(data.split('\n').where((line) => line.isNotEmpty).toList());
+      _output.addAll(lines.where((line) => line.trim().isNotEmpty));
       _isLoading = false;
     });
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _scrollController.animateTo(
         _scrollController.position.maxScrollExtent,
@@ -101,6 +112,7 @@ class _LinuxVMConsoleState extends State<LinuxVMConsole> {
       );
     });
   }
+
 
   Future<void> _initializeVM() async {
     try {
@@ -147,6 +159,9 @@ class _LinuxVMConsoleState extends State<LinuxVMConsole> {
         '-drive', 'file=$diskPath,if=none,id=hd0,format=qcow2',
         '-device', 'virtio-blk-device,drive=hd0',
         '-serial', 'mon:stdio',
+        '-serial', 'mon:stdio',
+        '-netdev', 'user,id=net0',
+        '-device', 'virtio-net-device,netdev=net0',
         '-boot', 'd',
       ];
 
@@ -165,7 +180,6 @@ class _LinuxVMConsoleState extends State<LinuxVMConsole> {
           _output.add('\nQEMU process exited with code $code');
         });
       });
-
     } catch (e) {
       setState(() {
         _errorMessage = 'Failed to start VM: $e\n\n'
@@ -187,60 +201,98 @@ class _LinuxVMConsoleState extends State<LinuxVMConsole> {
     await _initializeVM();
   }
 
+  void _sendCommand(String command) {
+    if (_qemuProcess != null) {
+      _qemuProcess!.stdin.writeln(command);
+      //_appendOutput('\$ $command');
+      _inputController.clear();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Alpine Linux VM Console'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _restartVM,
-            tooltip: 'Restart VM',
-          ),
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _restartVM),
         ],
       ),
-      body: _errorMessage != null
-          ? SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          children: [
-            Text(
-              _errorMessage!,
-              style: const TextStyle(color: Colors.red, fontSize: 16),
-            ),
-            const SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: _restartVM,
-              child: const Text('Try Again'),
-            ),
-          ],
-        ),
-      )
-          : Stack(
+      body: Column(
         children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            color: Colors.black,
-            child: ListView.builder(
-              controller: _scrollController,
-              itemCount: _output.length,
-              itemBuilder: (context, index) {
-                return SelectableText(
-                  _output[index],
-                  style: const TextStyle(
-                    color: Colors.lightGreenAccent,
-                    fontFamily: 'Courier New',
-                    fontSize: 14,
-                    height: 1.2,
+          if (_errorMessage != null)
+            Expanded(
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Text(
+                    _errorMessage!,
+                    style: const TextStyle(
+                        color: Colors.redAccent, fontSize: 16),
                   ),
-                );
-              },
-            ),
-          ),
+                ),
+              ),
+            )
+          else
+            ...[
+              Expanded(
+                child: SingleChildScrollView(
+                  controller: _scrollController,
+                  padding: const EdgeInsets.all(8),
+                  child: SelectableText(
+                    _output.join('\n'),
+                    style: const TextStyle(
+                      color: Colors.greenAccent,
+                      fontFamily: 'Courier',
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              ),
+
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                decoration: const BoxDecoration(
+                  border: Border(top: BorderSide(color: Colors.white12)),
+                  color: Colors.black87,
+                ),
+                child: Row(
+                  children: [
+                    const Text(
+                      '\$',
+                      style: TextStyle(
+                        fontFamily: 'Courier',
+                        color: Colors.greenAccent,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        controller: _inputController,
+                        onSubmitted: _sendCommand,
+                        style: const TextStyle(
+                          color: Colors.greenAccent,
+                          fontFamily: 'Courier',
+                          fontSize: 14,
+                        ),
+                        cursorColor: Colors.greenAccent,
+                        decoration: const InputDecoration(
+                          hintText: 'Enter command...',
+                          hintStyle: TextStyle(color: Colors.white38),
+                          isDense: true,
+                          border: InputBorder.none,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           if (_isLoading)
-            const Center(
-              child: CircularProgressIndicator(),
+            const LinearProgressIndicator(
+              minHeight: 2,
+              color: Colors.greenAccent,
             ),
         ],
       ),
