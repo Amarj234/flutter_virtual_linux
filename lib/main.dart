@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
@@ -9,11 +11,13 @@ void main() {
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
+
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(
+    return MaterialApp(
       debugShowCheckedModeBanner: false,
-      home: LinuxVMConsole(),
+      theme: ThemeData.dark(),
+      home: const LinuxVMConsole(),
     );
   }
 }
@@ -26,115 +30,219 @@ class LinuxVMConsole extends StatefulWidget {
 }
 
 class _LinuxVMConsoleState extends State<LinuxVMConsole> {
-  final List<String> output = [];
-  Process? qemuProcess;
+  final List<String> _output = [];
+  Process? _qemuProcess;
+  final ScrollController _scrollController = ScrollController();
+  bool _isLoading = true;
+  String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
-    prepareAndLaunchQemu();
+    _initializeVM();
   }
 
   @override
   void dispose() {
-    qemuProcess?.kill();
+    _qemuProcess?.kill();
+    _scrollController.dispose();
     super.dispose();
   }
 
-  Future<String> extractAssetToFile(String assetPath, String filename) async {
-    final directory = await getApplicationSupportDirectory();
-    final filePath = '${directory.path}/$filename';
+  Future<String> _extractAssetToFile(String assetPath, String filename) async {
+    try {
+      final directory = await getApplicationSupportDirectory();
+      final filePath = '${directory.path}/$filename';
+      final file = File(filePath);
 
-    final file = File(filePath);
+      if (!await file.exists()) {
+        final data = await rootBundle.load(assetPath);
+        final bytes = data.buffer.asUint8List();
+        await file.writeAsBytes(bytes, flush: true);
 
-    if (!await file.exists()) {
-      final data = await rootBundle.load(assetPath);
-      final bytes = data.buffer.asUint8List();
-      await file.writeAsBytes(bytes, flush: true);
-      if (filename.contains('qemu-system')) {
-        // Make executable
-        await Process.run('chmod', ['+x', filePath]);
+        if (Platform.isMacOS) {
+          // Remove quarantine attribute
+          await Process.run('xattr', ['-d', 'com.apple.quarantine', filePath]);
+          // Set executable permission if it's QEMU
+          if (filename.contains('qemu-system')) {
+            await Process.run('chmod', ['+x', filePath]);
+          }
+        }
       }
-    }
 
-    return filePath;
+      return filePath;
+    } catch (e) {
+      throw Exception('Failed to extract $filename: $e');
+    }
   }
 
-  Future<void> prepareAndLaunchQemu() async {
-    setState(() {
-      output.clear();
-      output.add('Extracting QEMU and disk image...');
-    });
-
+  Future<String?> _findSystemQemu() async {
     try {
-      final qemuPath = await extractAssetToFile('assets/qemu/qemu-system-x86_64', 'qemu-system-x86_64');
-      final diskPath = await extractAssetToFile('assets/alpine_disk.img', 'alpine_disk.img');
+      final result = await Process.run('which', ['qemu-system-aarch64']);
+      if (result.exitCode == 0) {
+        return result.stdout.toString().trim();
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
 
+  void _appendOutput(String data) {
+    setState(() {
+      _output.addAll(data.split('\n').where((line) => line.isNotEmpty).toList());
+      _isLoading = false;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    });
+  }
+
+  Future<void> _initializeVM() async {
+    try {
       setState(() {
-        output.add('QEMU path: $qemuPath');
-        output.add('Disk path: $diskPath');
+        _output.add('Initializing QEMU virtual machine...');
+        _isLoading = true;
+        _errorMessage = null;
       });
 
-      qemuProcess = await Process.start(
-        qemuPath,
-        [
-          '-hda',
-          diskPath,
-          '-m',
-          '512M',
-          '-nographic',
-          '-serial',
-          'mon:stdio',
-          '-boot',
-          'c',
-        ],
-        runInShell: true,
+      // Try to use system QEMU first
+      String qemuPath = await _findSystemQemu() ?? await _extractAssetToFile(
+        'assets/qemu/qemu-system-aarch64',
+        'qemu-system-aarch64',
       );
 
-      qemuProcess!.stdout.transform(SystemEncoding().decoder).listen((data) {
+      // Extract other required files
+      final diskPath = await _extractAssetToFile(
+        'assets/qemu/alpine_disk.img',
+        'alpine_disk.img',
+      );
+
+      final alpineIso = await _extractAssetToFile(
+        'assets/qemu/alpine-virt-3.22.0-aarch64.iso',
+        'alpine-virt-3.22.0-aarch64.iso',
+      );
+
+      final edk2Code = await _extractAssetToFile(
+        'assets/qemu/edk2-aarch64-code.fd',
+        'edk2-aarch64-code.fd',
+      );
+
+      setState(() {
+        _output.add('Using QEMU at: $qemuPath');
+        _output.add('Starting virtual machine...');
+      });
+
+      final args = [
+        '-machine', 'virt',
+        '-cpu', 'cortex-a72',
+        '-m', '512',
+        '-nographic',
+        '-drive', 'if=pflash,format=raw,readonly=on,file=$edk2Code',
+        '-cdrom', alpineIso,
+        '-drive', 'file=$diskPath,if=none,id=hd0,format=qcow2',
+        '-device', 'virtio-blk-device,drive=hd0',
+        '-serial', 'mon:stdio',
+        '-boot', 'd',
+      ];
+
+      _qemuProcess = await Process.start(qemuPath, args);
+
+      _qemuProcess!.stdout
+          .transform(const Utf8Decoder())
+          .listen(_appendOutput);
+
+      _qemuProcess!.stderr
+          .transform(const Utf8Decoder())
+          .listen((data) => _appendOutput('[ERROR] $data'));
+
+      _qemuProcess!.exitCode.then((code) {
         setState(() {
-          output.add(data);
+          _output.add('\nQEMU process exited with code $code');
         });
       });
 
-      qemuProcess!.stderr.transform(SystemEncoding().decoder).listen((data) {
-        setState(() {
-          output.add('[stderr] $data');
-        });
-      });
-
-      qemuProcess!.exitCode.then((code) {
-        setState(() {
-          output.add('QEMU exited with code $code');
-        });
-      });
     } catch (e) {
       setState(() {
-        output.add('Error: $e');
+        _errorMessage = 'Failed to start VM: $e\n\n'
+            'Possible solutions:\n'
+            '1. Install QEMU with Homebrew: "brew install qemu"\n'
+            '2. Disable app sandboxing in entitlements file\n'
+            '3. Grant full disk access to your IDE in macOS Settings';
+        _isLoading = false;
       });
     }
+  }
+
+  Future<void> _restartVM() async {
+    setState(() {
+      _output.clear();
+      _errorMessage = null;
+      _isLoading = true;
+    });
+    await _initializeVM();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Flutter Linux VM')),
-      body: Container(
-        color: Colors.black,
-        padding: const EdgeInsets.all(10),
-        child: ListView.builder(
-          itemCount: output.length,
-          itemBuilder: (context, index) {
-            print(output);
-            return SelectableText(
-            output[index],
-            style: const TextStyle(
-              color: Colors.greenAccent,
-              fontFamily: 'Courier',
-              fontSize: 12,
+      appBar: AppBar(
+        title: const Text('Alpine Linux VM Console'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _restartVM,
+            tooltip: 'Restart VM',
+          ),
+        ],
+      ),
+      body: _errorMessage != null
+          ? SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            Text(
+              _errorMessage!,
+              style: const TextStyle(color: Colors.red, fontSize: 16),
             ),
-          );}
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: _restartVM,
+              child: const Text('Try Again'),
+            ),
+          ],
         ),
+      )
+          : Stack(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            color: Colors.black,
+            child: ListView.builder(
+              controller: _scrollController,
+              itemCount: _output.length,
+              itemBuilder: (context, index) {
+                return SelectableText(
+                  _output[index],
+                  style: const TextStyle(
+                    color: Colors.lightGreenAccent,
+                    fontFamily: 'Courier New',
+                    fontSize: 14,
+                    height: 1.2,
+                  ),
+                );
+              },
+            ),
+          ),
+          if (_isLoading)
+            const Center(
+              child: CircularProgressIndicator(),
+            ),
+        ],
       ),
     );
   }
