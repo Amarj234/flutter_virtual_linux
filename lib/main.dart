@@ -45,7 +45,9 @@ class _LinuxVMConsoleState extends State<LinuxVMConsole> {
 
   @override
   void dispose() {
-    _qemuProcess?.kill();
+    _qemuProcess!.kill(ProcessSignal.sigkill); // Force kill
+
+    print('QEMU terminated');
     _scrollController.dispose();
     _inputController.dispose();
     super.dispose();
@@ -115,6 +117,8 @@ class _LinuxVMConsoleState extends State<LinuxVMConsole> {
 
 
   Future<void> _initializeVM() async {
+
+
     try {
       setState(() {
         _output.add('Initializing QEMU virtual machine...');
@@ -152,17 +156,17 @@ class _LinuxVMConsoleState extends State<LinuxVMConsole> {
       final args = [
         '-machine', 'virt',
         '-cpu', 'cortex-a72',
-        '-m', '512',
+        '-m', '1024',
         '-nographic',
         '-drive', 'if=pflash,format=raw,readonly=on,file=$edk2Code',
         '-cdrom', alpineIso,
         '-drive', 'file=$diskPath,if=none,id=hd0,format=qcow2',
         '-device', 'virtio-blk-device,drive=hd0',
         '-serial', 'mon:stdio',
-        '-serial', 'mon:stdio',
+        '-boot', 'd',
         '-netdev', 'user,id=net0',
         '-device', 'virtio-net-device,netdev=net0',
-        '-boot', 'd',
+
       ];
 
       _qemuProcess = await Process.start(qemuPath, args);
@@ -193,6 +197,14 @@ class _LinuxVMConsoleState extends State<LinuxVMConsole> {
   }
 
   Future<void> _restartVM() async {
+    if (_qemuProcess != null) {
+      print('Terminating QEMU...');
+      _qemuProcess!.kill(ProcessSignal.sigkill); // Force kill
+      await _qemuProcess!.exitCode;
+      print('QEMU terminated');
+      _qemuProcess = null;
+    }
+
     setState(() {
       _output.clear();
       _errorMessage = null;

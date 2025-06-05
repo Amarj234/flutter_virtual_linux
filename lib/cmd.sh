@@ -9,3 +9,15 @@ qemu-system-aarch64 \
   -device "virtio-blk-device,drive=hd0" \
   -serial mon:stdio \
   -boot d
+
+
+
+
+
+
+  #!/bin/sh
+  ip link set eth0 up
+  udhcpc -i eth0
+  echo "http://dl-cdn.alpinelinux.org/alpine/v3.22/main" > /etc/apk/repositories
+  echo "http://dl-cdn.alpinelinux.org/alpine/v3.22/community" >> /etc/apk/repositories
+  rc-update add networking default
