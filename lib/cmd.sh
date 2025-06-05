@@ -16,8 +16,13 @@ qemu-system-aarch64 \
 
 
   #!/bin/sh
-  ip link set eth0 up
-  udhcpc -i eth0
-  echo "http://dl-cdn.alpinelinux.org/alpine/v3.22/main" > /etc/apk/repositories
-  echo "http://dl-cdn.alpinelinux.org/alpine/v3.22/community" >> /etc/apk/repositories
-  rc-update add networking default
+auto eth0
+iface eth0 inet dhcp
+echo "nameserver 8.8.8.8" > /etc/resolv.conf
+
+ip link set eth0 up
+udhcpc -i eth0
+
+  echo "http://dl-cdn.alpinelinux.org/alpine/v3.22/main" > /etc/apk/repositories,
+  echo "http://dl-cdn.alpinelinux.org/alpine/v3.22/community" >> /etc/apk/repositories,
+  rc-update add networking default,

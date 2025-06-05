@@ -19,6 +19,11 @@ It provides a simple terminal console interface to interact with the VM directly
 
 ## Getting Started
 
+   qemu-img create -f qcow2 alpine_disk.img 2G ##  Create a 2GB disk image for Alpine Linux
+    wget https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/alpine-minirootfs-3.22.0-aarch64.tar.gz
+
+# Download Alpine Linux disk image and ISO
+
 ### Prerequisites
 
 - macOS (Apple Silicon preferred)

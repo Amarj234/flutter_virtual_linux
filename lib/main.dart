@@ -92,17 +92,20 @@ class _LinuxVMConsoleState extends State<LinuxVMConsole> {
     }
   }
   String _outputBuffer = '';
-
+  String stripAnsi(String input) {
+    final ansiRegex = RegExp(r'\x1B\[[0-9;]*[mK]');
+    return input.replaceAll(ansiRegex, '');
+  }
 
   void _appendOutput(String data) {
     _outputBuffer += data;
-
-    // Only process full lines
     final lines = _outputBuffer.split('\n');
-    _outputBuffer = lines.removeLast(); // Save the incomplete line
+    _outputBuffer = lines.removeLast();
 
     setState(() {
-      _output.addAll(lines.where((line) => line.trim().isNotEmpty));
+      _output.addAll(lines
+          .map(stripAnsi) // <-- remove weird color codes
+          .where((line) => line.trim().isNotEmpty));
       _isLoading = false;
     });
 
@@ -114,7 +117,6 @@ class _LinuxVMConsoleState extends State<LinuxVMConsole> {
       );
     });
   }
-
 
   Future<void> _initializeVM() async {
 
